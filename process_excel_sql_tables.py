@@ -22,6 +22,15 @@ def trim_spaces(df: pd.DataFrame) -> pd.DataFrame:
     return cleaned
 
 
+def parse_tables_safe(sql_text: str) -> tuple[list[str], bool]:
+    """Parse tables from SQL text, returning empty result and invalid flag on parser errors."""
+    try:
+        return Parser(sql_text).tables, False
+    except Exception as exc:  # sql-metadata may raise ValueError/NotImplementedError for invalid SQL
+        print(f"Warning: skipping invalid SQL query: {exc}")
+        return [], True
+
+
 def extract_table_names(df: pd.DataFrame, sql_column: str) -> pd.DataFrame:
     """Extract unique SQL table names from each SQL statement in ``sql_column``."""
     if sql_column not in df.columns:
@@ -32,10 +41,13 @@ def extract_table_names(df: pd.DataFrame, sql_column: str) -> pd.DataFrame:
 
     table_lists = []
     unique_tables: set[str] = set()
+    invalid_query_count = 0
 
     for value in df[sql_column]:
         if isinstance(value, str) and value.strip():
-            tables = Parser(value).tables
+            tables, is_invalid = parse_tables_safe(value)
+            if is_invalid:
+                invalid_query_count += 1
         else:
             tables = []
         table_lists.append(tables)
@@ -47,6 +59,9 @@ def extract_table_names(df: pd.DataFrame, sql_column: str) -> pd.DataFrame:
     print("Unique tables found:")
     for table in sorted(unique_tables):
         print(f"- {table}")
+
+    if invalid_query_count:
+        print(f"Ignored invalid SQL queries: {invalid_query_count}")
 
     return result
 
