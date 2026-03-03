@@ -1,0 +1,91 @@
+import pandas as pd
+import re
+
+
+def extract_table_names(sql: str) -> list[str]:
+    """
+    Extract table names from a SQL string.
+    Handles FROM, JOIN (all variants), INTO, UPDATE, and multi-line SQL.
+    """
+    if not isinstance(sql, str) or not sql.strip():
+        return []
+
+    # Remove comments (-- single line and /* block */)
+    sql = re.sub(r'--[^\n]*', ' ', sql)
+    sql = re.sub(r'/\*.*?\*/', ' ', sql, flags=re.DOTALL)
+
+    # Keywords that are followed by a table name
+    keywords = r'\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|INTO|UPDATE)\b'
+
+    # Match keyword followed by optional schema (schema.table or just table)
+    pattern = rf'{keywords}\s+([\w\.\`\"\[\]]+)'
+
+    matches = re.findall(pattern, sql, flags=re.IGNORECASE)
+
+    # Clean up: strip brackets/backticks/quotes, lowercase
+    tables = []
+    for m in matches:
+        name = re.sub(r'[\`\"\[\]]', '', m).strip()
+        if name and name.upper() not in ('SELECT', 'SET', 'WHERE', 'ON'):
+            tables.append(name)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for t in tables:
+        key = t.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(t)
+
+    return unique
+
+
+def load_and_expand(filepath: str, sql_column: str) -> pd.DataFrame:
+    """
+    Load an Excel file, extract table names from a SQL column,
+    and expand rows so each row maps to exactly one table name.
+
+    Args:
+        filepath:   Path to the .xlsx / .xls file
+        sql_column: Name of the column containing SQL text
+
+    Returns:
+        Expanded DataFrame with a new 'table_name' column
+    """
+    # --- 1. Load Excel ---
+    df = pd.read_excel(filepath)
+
+    if sql_column not in df.columns:
+        raise ValueError(f"Column '{sql_column}' not found. Available: {list(df.columns)}")
+
+    # --- 2. Extract table names into a new column (list per row) ---
+    df['table_names'] = df[sql_column].apply(extract_table_names)
+
+    # --- 3. Explode: replicate rows when multiple tables found ---
+    df_expanded = df.explode('table_names').reset_index(drop=True)
+
+    # Rename for clarity
+    df_expanded.rename(columns={'table_names': 'table_name'}, inplace=True)
+
+    # Handle rows where no table was found (empty string instead of NaN)
+    df_expanded['table_name'] = df_expanded['table_name'].fillna('NO_TABLE_FOUND')
+
+    return df_expanded
+
+
+# ──────────────────────────────────────────────
+# Example usage
+# ──────────────────────────────────────────────
+if __name__ == "__main__":
+    FILE_PATH  = "your_file.xlsx"   # <-- change this
+    SQL_COLUMN = "sql_text"         # <-- change this to your column name
+
+    result = load_and_expand(FILE_PATH, SQL_COLUMN)
+
+    print(result[['table_name']].value_counts())
+    print("\nFull expanded DataFrame:")
+    print(result.to_string())
+
+    # Optional: save to Excel
+    # result.to_excel("output_expanded.xlsx", index=False)
