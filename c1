@@ -1,0 +1,73 @@
+import pandas as pd
+import re
+
+
+def extract_table_names(sql: str) -> list[str]:
+    """Extract unique table names from a SQL string."""
+    if not isinstance(sql, str) or not sql.strip():
+        return ["NO_TABLE_FOUND"]
+
+    # Remove comments
+    sql = re.sub(r'--[^\n]*', ' ', sql)
+    sql = re.sub(r'/\*.*?\*/', ' ', sql, flags=re.DOTALL)
+
+    keywords = r'\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|CROSS\s+JOIN|INTO|UPDATE)\b'
+    pattern  = rf'{keywords}\s+([\w\.\`\"\[\]]+)'
+    matches  = re.findall(pattern, sql, flags=re.IGNORECASE)
+
+    # Clean brackets/backticks/quotes
+    skip = {'SELECT', 'SET', 'WHERE', 'ON'}
+    seen, tables = set(), []
+    for m in matches:
+        name = re.sub(r'[\`\"\[\]]', '', m).strip()
+        if name.upper() not in skip and name.lower() not in seen:
+            seen.add(name.lower())
+            tables.append(name)
+
+    return tables if tables else ["NO_TABLE_FOUND"]
+
+
+def process_excel(input_path: str, sql_column: str, output_path: str) -> pd.DataFrame:
+    """
+    Read Excel → extract table names → explode rows → write back to Excel.
+
+    Args:
+        input_path:  Path to the source .xlsx file
+        sql_column:  Column name that contains the SQL text
+        output_path: Path for the output .xlsx file
+
+    Returns:
+        Expanded DataFrame (one row per table name)
+    """
+    # 1. Load Excel into DataFrame
+    df = pd.read_excel(input_path)
+
+    if sql_column not in df.columns:
+        raise ValueError(f"Column '{sql_column}' not found. Available columns: {list(df.columns)}")
+
+    # 2. Extract table names as a list per row
+    df['table_name'] = df[sql_column].apply(extract_table_names)
+
+    # 3. Explode — replicates each row once per table name found
+    df_expanded = (
+        df.explode('table_name')
+          .reset_index(drop=True)
+    )
+
+    # 4. Write expanded DataFrame back to Excel
+    df_expanded.to_excel(output_path, index=False)
+    print(f"Done! {len(df_expanded)} rows written to '{output_path}'")
+    print(f"  Original rows : {len(df)}")
+    print(f"  Expanded rows : {len(df_expanded)}")
+
+    return df_expanded
+
+
+# ── Run ──────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    INPUT_FILE  = "your_file.xlsx"      # <-- your input Excel file
+    SQL_COLUMN  = "sql_text"            # <-- your SQL column name
+    OUTPUT_FILE = "output_expanded.xlsx"
+
+    result_df = process_excel(INPUT_FILE, SQL_COLUMN, OUTPUT_FILE)
+    print(result_df)
